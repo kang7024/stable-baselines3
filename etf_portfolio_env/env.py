@@ -24,9 +24,9 @@ class EtfPortfolioEnv(gym.Env):
 
     Action
     ------
-    Continuous vector of 11 logits in [-1, 1]. A 12th cash logit (fixed at 0)
-    is appended, then softmax with temperature converts them to weights that
-    sum to 1. Individual ETF weights are hard-capped at 0.3; any excess is
+    Continuous vector of 12 logits in [-1, 1]: 11 ETFs + 1 cash.
+    softmax(logits / temperature) converts them to weights summing to 1.
+    Individual ETF weights are hard-capped at 0.3; any excess is
     redistributed to cash.
 
     Reward
@@ -102,10 +102,11 @@ class EtfPortfolioEnv(gym.Env):
         # --- Spaces ---
         self.max_etf_weight = 0.3
 
-        # Action: 11 logits in [-1, 1]. Internally a 12th cash logit (=0) is
-        # appended and softmax(temperature) converts to weights summing to 1.
+        # Action: 12 logits in [-1, 1] (11 ETFs + 1 cash).
+        # softmax(logits / temperature) converts to weights summing to 1.
+        self.n_assets = self.n_etfs + 1  # 11 ETFs + cash
         self.action_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(self.n_etfs,), dtype=np.float32
+            low=-1.0, high=1.0, shape=(self.n_assets,), dtype=np.float32
         )
 
         # Observation: all values are roughly normalized, but use generous bounds
@@ -135,23 +136,19 @@ class EtfPortfolioEnv(gym.Env):
 
     def _map_action(self, raw_action: np.ndarray) -> np.ndarray:
         """
-        Map raw action logits to valid portfolio weights via tempered softmax.
+        Map 12 raw logits (11 ETFs + 1 cash) to portfolio weights via tempered softmax.
 
         Steps:
-          1. Append a cash logit of 0 (neutral baseline) to the 11 ETF logits.
-          2. Apply softmax(logits / temperature) → 12 weights summing to 1.
-          3. Hard-cap each ETF weight at max_etf_weight (0.3).
-          4. Redistribute any clipped excess to cash.
+          1. Apply softmax(logits / temperature) → 12 weights summing to 1.
+          2. Hard-cap each ETF weight at max_etf_weight (0.3).
+          3. Redistribute any clipped excess to cash.
 
-        Returns array of length n_etfs + 1 (ETFs + cash), summing to 1.
+        Returns array of length 12 (11 ETFs + cash), summing to 1.
         """
         tau = self.softmax_temperature
 
-        # 11 ETF logits + 1 cash logit (fixed at 0)
-        logits = np.append(raw_action, 0.0)
-
         # Tempered softmax (subtract max for numerical stability)
-        scaled = logits / tau
+        scaled = raw_action / tau
         scaled -= scaled.max()
         exp_vals = np.exp(scaled)
         weights = exp_vals / exp_vals.sum()
@@ -160,7 +157,7 @@ class EtfPortfolioEnv(gym.Env):
         etf_weights = weights[:self.n_etfs]
         excess = np.maximum(etf_weights - self.max_etf_weight, 0.0).sum()
         etf_weights = np.clip(etf_weights, 0.0, self.max_etf_weight)
-        cash_weight = weights[self.n_etfs] + excess
+        cash_weight = weights[-1] + excess
 
         return np.append(etf_weights, cash_weight)
 
