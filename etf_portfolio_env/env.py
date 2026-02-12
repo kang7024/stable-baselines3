@@ -93,9 +93,12 @@ class EtfPortfolioEnv(gym.Env):
         self.n_obs = self.n_market_features + self.n_etfs + 1 + 1
 
         # --- Spaces ---
-        # Action: 11 ETF weights, each in [0, 0.3]
+        self.max_etf_weight = 0.3
+
+        # Action: 11 values in [-1, 1] (symmetric, normalized)
+        # Mapped internally to [0, max_etf_weight] via (action + 1) / 2 * max_weight
         self.action_space = spaces.Box(
-            low=0.0, high=0.3, shape=(self.n_etfs,), dtype=np.float32
+            low=-1.0, high=1.0, shape=(self.n_etfs,), dtype=np.float32
         )
 
         # Observation: all values are roughly normalized, but use generous bounds
@@ -123,17 +126,39 @@ class EtfPortfolioEnv(gym.Env):
         info = {"portfolio_value": self._portfolio_value, "weights": self._weights.copy()}
         return obs, info
 
+    def _map_action(self, raw_action: np.ndarray) -> np.ndarray:
+        """
+        Map raw action from [-1, 1] to valid portfolio weights.
+
+        Steps:
+          1. Map [-1, 1] → [0, max_etf_weight] per ETF.
+          2. If the sum exceeds 1, iteratively clip the largest weights
+             down while preserving the per-ETF cap of max_etf_weight.
+          3. Cash = 1 - sum(ETF weights).
+
+        Returns array of length n_etfs + 1 (ETFs + cash), summing to 1.
+        """
+        # Step 1: [-1, 1] → [0, 0.3]
+        weights = (raw_action + 1.0) / 2.0 * self.max_etf_weight
+        weights = np.clip(weights, 0.0, self.max_etf_weight)
+
+        # Step 2: If total > 1, proportionally reduce while respecting cap
+        total = weights.sum()
+        if total > 1.0:
+            # Scale down proportionally, then re-clip to max_etf_weight
+            # Iterative approach ensures caps are respected
+            for _ in range(10):  # Converges quickly
+                weights = weights * (1.0 / total)
+                weights = np.clip(weights, 0.0, self.max_etf_weight)
+                total = weights.sum()
+                if total <= 1.0:
+                    break
+
+        cash = 1.0 - weights.sum()
+        return np.append(weights, max(cash, 0.0))
+
     def step(self, action: np.ndarray):
-        action = np.clip(action.astype(np.float64), 0.0, 0.3)
-
-        # Ensure total ETF weight doesn't exceed 1
-        total_etf_weight = action.sum()
-        if total_etf_weight > 1.0:
-            action = action / total_etf_weight  # Scale down proportionally
-            total_etf_weight = 1.0
-        cash_weight = 1.0 - total_etf_weight
-
-        new_weights = np.append(action, cash_weight)
+        new_weights = self._map_action(action.astype(np.float64))
 
         # --- Transaction cost ---
         weight_change = np.abs(new_weights - self._weights)
