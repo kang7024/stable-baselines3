@@ -26,8 +26,8 @@ class EtfPortfolioEnv(gym.Env):
     ------
     Continuous vector of 12 logits in [-1, 1]: 11 ETFs + 1 cash.
     softmax(logits / temperature) converts them to weights summing to 1.
-    Individual ETF weights are hard-capped at 0.3; any excess is
-    redistributed to cash.
+    The logit range [-1,1] combined with temperature naturally controls
+    the maximum concentration on any single asset (no hard clipping).
 
     Reward
     ------
@@ -100,8 +100,6 @@ class EtfPortfolioEnv(gym.Env):
         self.n_obs = self.n_market_features + self.n_etfs + 1 + 1
 
         # --- Spaces ---
-        self.max_etf_weight = 0.3
-
         # Action: 12 logits in [-1, 1] (11 ETFs + 1 cash).
         # softmax(logits / temperature) converts to weights summing to 1.
         self.n_assets = self.n_etfs + 1  # 11 ETFs + cash
@@ -138,10 +136,9 @@ class EtfPortfolioEnv(gym.Env):
         """
         Map 12 raw logits (11 ETFs + 1 cash) to portfolio weights via tempered softmax.
 
-        Steps:
-          1. Apply softmax(logits / temperature) → 12 weights summing to 1.
-          2. Hard-cap each ETF weight at max_etf_weight (0.3).
-          3. Redistribute any clipped excess to cash.
+        With logits in [-1, 1] and temperature τ, the theoretical max weight
+        for a single asset is softmax(1/τ) among 12 elements:
+          τ=1.0 → ~40%,  τ=0.5 → ~60%,  τ=2.0 → ~11%
 
         Returns array of length 12 (11 ETFs + cash), summing to 1.
         """
@@ -153,13 +150,7 @@ class EtfPortfolioEnv(gym.Env):
         exp_vals = np.exp(scaled)
         weights = exp_vals / exp_vals.sum()
 
-        # Hard-cap each ETF at max_etf_weight, give excess to cash
-        etf_weights = weights[:self.n_etfs]
-        excess = np.maximum(etf_weights - self.max_etf_weight, 0.0).sum()
-        etf_weights = np.clip(etf_weights, 0.0, self.max_etf_weight)
-        cash_weight = weights[-1] + excess
-
-        return np.append(etf_weights, cash_weight)
+        return weights
 
     def step(self, action: np.ndarray):
         new_weights = self._map_action(action.astype(np.float64))
