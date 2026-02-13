@@ -13,6 +13,18 @@ env:
   transaction_cost_bp: 5.0
   max_loss_pct: 0.07
 
+# Feature toggles (true = use, false = skip)
+features:
+  logret: true
+  volatility: true
+  rsi: true
+  macd: true
+  bollinger: true
+  atr: true
+  volume_ratio: true
+  sma_dist: true
+  macro: true
+
 # Training hyperparameters
 training:
   total_timesteps: 50000

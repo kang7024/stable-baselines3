@@ -61,9 +61,23 @@ def _atr(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) ->
     return atr / close  # Normalize by close price
 
 
+_DEFAULT_FEATURE_CFG: dict[str, bool] = {
+    "logret": True,
+    "volatility": True,
+    "rsi": True,
+    "macd": True,
+    "bollinger": True,
+    "atr": True,
+    "volume_ratio": True,
+    "sma_dist": True,
+    "macro": True,
+}
+
+
 def compute_features(etf_data: dict[str, pd.DataFrame],
                      macro_data: pd.DataFrame | None = None,
-                     fill_unlisted: bool = True) -> pd.DataFrame:
+                     fill_unlisted: bool = True,
+                     feature_cfg: dict[str, bool] | None = None) -> pd.DataFrame:
     """
     Compute all features from raw ETF OHLCV data and optional macro data.
 
@@ -84,6 +98,11 @@ def compute_features(etf_data: dict[str, pd.DataFrame],
         and only drop rows where ALL ETF features are NaN.
         If False, drop all rows with any NaN (original behavior, requires
         all ETFs to share the same date range).
+    feature_cfg : dict[str, bool] or None
+        Toggle individual feature groups on/off.
+        Keys: logret, volatility, rsi, macd, bollinger, atr, volume_ratio,
+              sma_dist, macro.
+        Defaults to all True if None.
 
     Returns
     -------
@@ -92,6 +111,8 @@ def compute_features(etf_data: dict[str, pd.DataFrame],
         When fill_unlisted=True, each feature column X is expanded to
         (X, X_flag) pairs: valid → (value, 0), invalid → (0, 1).
     """
+    cfg = {**_DEFAULT_FEATURE_CFG, **(feature_cfg or {})}
+
     all_features = []
 
     for ticker, df in etf_data.items():
@@ -103,47 +124,49 @@ def compute_features(etf_data: dict[str, pd.DataFrame],
         feat = pd.DataFrame(index=df.index)
 
         # --- Log returns ---
-        for period in [1, 5, 20, 60]:
-            feat[f"{ticker}_logret_{period}d"] = np.log(close / close.shift(period))
+        if cfg["logret"]:
+            for period in [1, 5, 20, 60]:
+                feat[f"{ticker}_logret_{period}d"] = np.log(close / close.shift(period))
 
         # --- Realized volatility (std of 1-day log returns over window) ---
-        log_ret_1d = np.log(close / close.shift(1))
-        for period in [1, 5, 20, 60]:
-            if period == 1:
-                # For 1-day "volatility", use absolute return as proxy
-                feat[f"{ticker}_vol_1d"] = log_ret_1d.abs()
-            else:
-                feat[f"{ticker}_vol_{period}d"] = log_ret_1d.rolling(
-                    window=period, min_periods=period
-                ).std() * np.sqrt(252)  # Annualized
+        if cfg["volatility"]:
+            log_ret_1d = np.log(close / close.shift(1))
+            for period in [1, 5, 20, 60]:
+                if period == 1:
+                    # For 1-day "volatility", use absolute return as proxy
+                    feat[f"{ticker}_vol_1d"] = log_ret_1d.abs()
+                else:
+                    feat[f"{ticker}_vol_{period}d"] = log_ret_1d.rolling(
+                        window=period, min_periods=period
+                    ).std() * np.sqrt(252)  # Annualized
 
         # --- Technical indicators ---
-        # RSI-14
-        feat[f"{ticker}_rsi_14"] = _rsi(close, 14) / 100.0  # Normalize to [0,1]
+        if cfg["rsi"]:
+            feat[f"{ticker}_rsi_14"] = _rsi(close, 14) / 100.0  # Normalize to [0,1]
 
-        # MACD histogram (normalized by close)
-        macd_line, signal_line = _macd(close)
-        feat[f"{ticker}_macd_hist"] = (macd_line - signal_line) / close
+        if cfg["macd"]:
+            macd_line, signal_line = _macd(close)
+            feat[f"{ticker}_macd_hist"] = (macd_line - signal_line) / close
 
-        # Bollinger %B
-        feat[f"{ticker}_bb_pctb"] = _bollinger_bands(close, 20, 2.0)
+        if cfg["bollinger"]:
+            feat[f"{ticker}_bb_pctb"] = _bollinger_bands(close, 20, 2.0)
 
-        # ATR (already normalized)
-        feat[f"{ticker}_atr_14"] = _atr(high, low, close, 14)
+        if cfg["atr"]:
+            feat[f"{ticker}_atr_14"] = _atr(high, low, close, 14)
 
-        # Volume ratio (current / 20-day avg)
-        vol_ma20 = _sma(volume.astype(float), 20)
-        feat[f"{ticker}_vol_ratio"] = volume / vol_ma20.replace(0, np.nan)
+        if cfg["volume_ratio"]:
+            vol_ma20 = _sma(volume.astype(float), 20)
+            feat[f"{ticker}_vol_ratio"] = volume / vol_ma20.replace(0, np.nan)
 
-        # SMA cross signal: (close - SMA20) / close
-        feat[f"{ticker}_sma20_dist"] = (close - _sma(close, 20)) / close
+        if cfg["sma_dist"]:
+            feat[f"{ticker}_sma20_dist"] = (close - _sma(close, 20)) / close
 
         all_features.append(feat)
 
     features = pd.concat(all_features, axis=1)
 
     # Add macro data if provided
-    if macro_data is not None:
+    if macro_data is not None and cfg["macro"]:
         features = features.join(macro_data, how="left")
         # Forward-fill macro data (may have different frequency)
         for col in macro_data.columns:
@@ -153,7 +176,7 @@ def compute_features(etf_data: dict[str, pd.DataFrame],
         # Drop rows where ALL features are NaN (no ETF has data at all)
         features = features.dropna(how="all")
         # Drop initial rows where macro data hasn't started yet
-        if macro_data is not None:
+        if macro_data is not None and cfg["macro"]:
             macro_cols = [c for c in macro_data.columns if c in features.columns]
             if macro_cols:
                 features = features.dropna(subset=macro_cols)
