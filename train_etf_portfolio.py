@@ -31,11 +31,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 
 from etf_portfolio_env.env import EtfPortfolioEnv
 from etf_portfolio_env.features import compute_features
-from etf_portfolio_env.sample_data import (
-    DEFAULT_ETF_TICKERS,
-    generate_synthetic_macro,
-    generate_synthetic_ohlcv,
-)
+from stable_baselines3.common.market_data_utils import multiindex_to_dict
 
 ALGO_MAP = {
     "PPO": PPO,
@@ -180,11 +176,14 @@ def main():
     print(f"Run directory: {run_dir}")
     print("=" * 60)
 
-    # --- 1. Generate data ---
-    print("\n[1/5] Generating synthetic data...")
-    tickers = DEFAULT_ETF_TICKERS
-    etf_data = generate_synthetic_ohlcv(tickers, n_days=cfg_data["n_days"], seed=cfg_data.get("seed", 42))
-    macro_data = generate_synthetic_macro(n_days=cfg_data["n_days"], seed=cfg_data.get("seed", 123))
+    # --- 1. Load data ---
+    print("\n[1/5] Loading market data...")
+    ETF_DATA_PATH = "PATH"
+    MACRO_DATA_PATH = "PATH"
+
+    etf_data = multiindex_to_dict(pd.read_parquet(ETF_DATA_PATH))
+    tickers = list(etf_data.keys())
+    macro_data = pd.read_parquet(MACRO_DATA_PATH)
 
     # --- 2. Build environment ---
     print("[2/5] Building environment...")
