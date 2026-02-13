@@ -153,30 +153,30 @@ class EtfPortfolioEnv(gym.Env):
 
     def _map_action(self, raw_action: np.ndarray) -> np.ndarray:
         """
-        Map raw logits to portfolio weights via tempered softmax,
-        then apply tradable mask: untradable ETF weights → 0, excess → cash.
+        Map raw logits to portfolio weights via masked tempered softmax.
+
+        Untradable ETF logits are set to -inf BEFORE softmax, so they
+        naturally get weight 0. This keeps the mapping differentiable
+        and avoids confusing the agent with post-hoc weight redistribution.
+
+        Cash logit is never masked (always tradable).
 
         Returns array of length (N+1), summing to 1.
         """
         tau = self.softmax_temperature
         mask = self._get_tradable_mask()  # (N_etfs,)
 
+        # Set untradable ETF logits to -inf before softmax
+        # Cash (last element) is always tradable
+        logits = raw_action.copy()
+        logits[:self.n_etfs] = np.where(mask > 0, logits[:self.n_etfs], -np.inf)
+
         # Tempered softmax (subtract max for numerical stability)
-        scaled = raw_action / tau
-        scaled -= scaled.max()
-        exp_vals = np.exp(scaled)
+        scaled = logits / tau
+        scaled -= np.max(scaled[np.isfinite(scaled)])  # max over finite values only
+        exp_vals = np.where(np.isfinite(scaled), np.exp(scaled), 0.0)
         weights = exp_vals / exp_vals.sum()
 
-        # Apply tradable mask: zero out untradable ETFs
-        etf_weights = weights[:self.n_etfs]
-        cash_weight = weights[-1]
-
-        # Weight from untradable ETFs goes to cash
-        untradable_weight = (etf_weights * (1.0 - mask)).sum()
-        etf_weights = etf_weights * mask
-        cash_weight += untradable_weight
-
-        weights = np.append(etf_weights, cash_weight)
         return weights
 
     def step(self, action: np.ndarray):
