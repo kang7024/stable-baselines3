@@ -85,9 +85,10 @@ def build_env(
     tickers: list[str],
     transaction_cost_bp: float = 5.0,
     max_loss_pct: float = 0.07,
+    feature_cfg: dict[str, bool] | None = None,
 ) -> EtfPortfolioEnv:
     """Build the environment from raw data."""
-    feature_df = compute_features(etf_data, macro_data)
+    feature_df = compute_features(etf_data, macro_data, feature_cfg=feature_cfg)
 
     close_frames = []
     for ticker in tickers:
@@ -161,6 +162,7 @@ def main():
     cfg_data = cfg["data"]
     cfg_env = cfg["env"]
     cfg_training = cfg["training"]
+    cfg_features = cfg.get("features")
 
     if algo_name not in ALGO_MAP:
         raise ValueError(f"Unknown algorithm '{algo_name}'. Choose from: {list(ALGO_MAP.keys())}")
@@ -190,6 +192,7 @@ def main():
         etf_data, macro_data, tickers,
         transaction_cost_bp=cfg_env["transaction_cost_bp"],
         max_loss_pct=cfg_env["max_loss_pct"],
+        feature_cfg=cfg_features,
     )
 
     # --- 3. Validate environment ---
@@ -211,6 +214,7 @@ def main():
         etf_data, macro_data, tickers,
         transaction_cost_bp=cfg_env["transaction_cost_bp"],
         max_loss_pct=cfg_env["max_loss_pct"],
+        feature_cfg=cfg_features,
     )])
 
     model = make_model(algo_name, vec_env, cfg_training, tb_log_dir)
@@ -228,6 +232,7 @@ def main():
         etf_data, macro_data, tickers,
         transaction_cost_bp=cfg_env["transaction_cost_bp"],
         max_loss_pct=cfg_env["max_loss_pct"],
+        feature_cfg=cfg_features,
     )
     obs, info = eval_env.reset()
 
