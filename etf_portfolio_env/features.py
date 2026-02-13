@@ -62,9 +62,14 @@ def _atr(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) ->
 
 
 def compute_features(etf_data: dict[str, pd.DataFrame],
-                     macro_data: pd.DataFrame | None = None) -> pd.DataFrame:
+                     macro_data: pd.DataFrame | None = None,
+                     fill_unlisted: bool = True) -> pd.DataFrame:
     """
     Compute all features from raw ETF OHLCV data and optional macro data.
+
+    Supports ETFs with different listing dates. Features for unlisted periods
+    are filled with 0.0 (the tradable_mask in the env tells the agent which
+    ETFs are real vs padded).
 
     Parameters
     ----------
@@ -74,12 +79,16 @@ def compute_features(etf_data: dict[str, pd.DataFrame],
     macro_data : pd.DataFrame or None
         DataFrame with macro indicators (e.g., put-call ratio, exchange rate)
         indexed by date. Columns are used as-is.
+    fill_unlisted : bool
+        If True, fill NaN features (from unlisted/warmup periods) with 0.0
+        and only drop rows where ALL ETF features are NaN.
+        If False, drop all rows with any NaN (original behavior, requires
+        all ETFs to share the same date range).
 
     Returns
     -------
     pd.DataFrame
-        Combined feature DataFrame indexed by date. NaN rows at the beginning
-        (due to rolling windows) are dropped.
+        Combined feature DataFrame indexed by date.
     """
     all_features = []
 
@@ -138,7 +147,18 @@ def compute_features(etf_data: dict[str, pd.DataFrame],
         for col in macro_data.columns:
             features[col] = features[col].ffill()
 
-    # Drop rows with NaN (from rolling windows, need at least 60 days)
-    features = features.dropna()
+    if fill_unlisted:
+        # Drop rows where ALL features are NaN (no ETF has data at all)
+        features = features.dropna(how="all")
+        # Drop initial rows where macro data hasn't started yet
+        if macro_data is not None:
+            macro_cols = [c for c in macro_data.columns if c in features.columns]
+            if macro_cols:
+                features = features.dropna(subset=macro_cols)
+        # Fill remaining NaN with 0.0 (unlisted ETF features + rolling warmup)
+        features = features.fillna(0.0)
+    else:
+        # Original behavior: drop all rows with any NaN
+        features = features.dropna()
 
     return features
