@@ -4,9 +4,11 @@ ETF data preprocessing module.
 Applies cleaning rules to handle missing data from non-trading days
 and other data quality issues in Bloomberg-sourced OHLCV data.
 
+Pre-listing rows are NOT dropped here — they are kept so that the
+feature layer can encode them as (0, 1) flag vectors.
+
 Rules (applied in order)
 ------------------------
-Pre-step: Drop pre-listing rows (H/L/C all NaN)
 1. OHLC all NaN → ffill Close (targeted via temp column), O/H/L = Close, Volume = 0
 2. Close exists but O/H/L NaN → O/H/L = Close
 3. O == H == L == C and Volume is NaN → Volume = 0
@@ -31,24 +33,11 @@ def preprocess_etf(df: pd.DataFrame, ticker: str | None = None) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        Cleaned DataFrame. Pre-listing rows are dropped.
-        NaN prices are filled per the rules above.
+        Cleaned DataFrame. Pre-listing rows are kept (not dropped).
+        NaN prices are filled per the rules above where applicable.
     """
     df = df.copy()
     ohlc_cols = ["Open", "High", "Low", "Close"]
-
-    # --- Pre-step: Drop rows where High/Low/Close are ALL NaN ---
-    # These are pre-listing rows with no price formation at all.
-    hlc_cols = ["High", "Low", "Close"]
-    actual_hlc = [c for c in hlc_cols if c in df.columns]
-    if actual_hlc:
-        hlc_all_nan = df[actual_hlc].isna().all(axis=1)
-        n_dropped = hlc_all_nan.sum()
-        if n_dropped > 0 and ticker:
-            first_valid = df.index[~hlc_all_nan][0] if (~hlc_all_nan).any() else None
-            print(f"  [{ticker}] Pre-step: Dropped {n_dropped} pre-listing rows "
-                  f"(first valid date: {first_valid})")
-        df = df[~hlc_all_nan].copy()
 
     if df.empty:
         return df
@@ -149,12 +138,12 @@ def preprocess_all_etfs(
         cleaned = preprocess_etf(df, ticker=ticker)
         cleaned_data[ticker] = cleaned
 
-    # Build tradable mask: True if Close is not NaN after preprocessing
+    # Build tradable mask: True if Close is not NaN after rule-based cleaning
+    # (before the blanket ffill below — so pre-listing NaN → tradable=False)
     tradable_mask = pd.DataFrame(index=common_dates, columns=tickers, dtype=bool)
     for ticker in tickers:
         cleaned = cleaned_data[ticker]
-        # An ETF is tradable on dates that exist in its cleaned data
-        tradable_mask[ticker] = common_dates.isin(cleaned.index)
+        tradable_mask[ticker] = cleaned["Close"].notna()
 
     # Re-reindex cleaned data to common_dates and forward-fill
     # (so we have price values even for non-trading days — needed for env)

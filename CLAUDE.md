@@ -23,3 +23,22 @@ Close가 유효한데 Open/High/Low 중 일부가 NaN이면 Close 값으로 채�
 OHLC가 모두 동일한 유효값 = 가격 변동 없음 = 거래가 없었을 가능성.
 Volume만 누락된 경우 0으로 채움.
 OHLC + Volume 5개 컬럼이 모두 존재할 때만 적용.
+
+## Feature (value, flag) 인코딩
+
+상장 이전, MA warmup 기간 등 유효하지 않은 피처 값을 처리하는 방식.
+행을 삭제하지 않고, 각 피처를 2차원 벡터로 확장한다.
+
+- 유효한 값: `(value, 0)`
+- 유효하지 않은 값 (NaN): `(0, 1)`
+
+flag 0 = 유효, flag 1 = 무효.
+
+### 적용 대상
+- 상장 이전 (pre-listing): 가격 데이터 자체가 없음
+- Rolling warmup: MA20, RSI14 등 지표 계산에 필요한 최소 기간 미충족
+- 기타 NaN: 어떤 이유로든 피처 값이 비어있는 경우
+
+### 적용하지 않는 대상
+- tradable_mask: 기존대로 별도 binary 벡터
+- portfolio weights, cumulative PnL: 항상 유효 (env에서 계산)

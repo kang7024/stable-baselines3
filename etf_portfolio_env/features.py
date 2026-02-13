@@ -89,6 +89,8 @@ def compute_features(etf_data: dict[str, pd.DataFrame],
     -------
     pd.DataFrame
         Combined feature DataFrame indexed by date.
+        When fill_unlisted=True, each feature column X is expanded to
+        (X, X_flag) pairs: valid → (value, 0), invalid → (0, 1).
     """
     all_features = []
 
@@ -155,8 +157,19 @@ def compute_features(etf_data: dict[str, pd.DataFrame],
             macro_cols = [c for c in macro_data.columns if c in features.columns]
             if macro_cols:
                 features = features.dropna(subset=macro_cols)
-        # Fill remaining NaN with 0.0 (unlisted ETF features + rolling warmup)
-        features = features.fillna(0.0)
+
+        # --- (value, flag) encoding ---
+        # flag=0 → valid, flag=1 → invalid (pre-listing, warmup NaN, etc.)
+        original_cols = features.columns.tolist()
+        flags = features.isna().astype(np.float32)
+        values = features.fillna(0.0)
+
+        # Interleave: [feat1_val, feat1_flag, feat2_val, feat2_flag, ...]
+        interleaved = []
+        for col in original_cols:
+            interleaved.append(values[[col]])
+            interleaved.append(flags[[col]].rename(columns={col: f"{col}_flag"}))
+        features = pd.concat(interleaved, axis=1)
     else:
         # Original behavior: drop all rows with any NaN
         features = features.dropna()
