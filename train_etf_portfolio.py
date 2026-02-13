@@ -1,22 +1,32 @@
 """
-Training script for ETF Portfolio environment with PPO.
+Training script for ETF Portfolio environment with RL algorithms.
 
 Usage:
-    python train_etf_portfolio.py
+    python train_etf_portfolio.py                  # use default config.yaml
+    python train_etf_portfolio.py --config my.yaml  # use custom config
 
 This script:
-  1. Generates synthetic OHLCV + macro data (replace with real data)
-  2. Computes technical indicators and features
-  3. Creates the EtfPortfolioEnv
-  4. Trains a PPO agent
-  5. Evaluates the trained agent
+  1. Loads configuration from YAML file
+  2. Generates synthetic OHLCV + macro data (replace with real data)
+  3. Computes technical indicators and features
+  4. Creates the EtfPortfolioEnv
+  5. Trains an RL agent (PPO/A2C/SAC)
+  6. Evaluates the trained agent
+  7. Saves model, logs, config, and evaluation results to a run directory
 """
+
+import argparse
+import json
+import os
+import shutil
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
-from stable_baselines3 import PPO
-from stable_baselines3.common.env_checker import check_env
+import yaml
+from stable_baselines3 import A2C, PPO, SAC
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 from etf_portfolio_env.env import EtfPortfolioEnv
@@ -26,6 +36,26 @@ from etf_portfolio_env.sample_data import (
     generate_synthetic_macro,
     generate_synthetic_ohlcv,
 )
+
+ALGO_MAP = {
+    "PPO": PPO,
+    "A2C": A2C,
+    "SAC": SAC,
+}
+
+
+def load_config(path: str) -> dict:
+    """Load YAML configuration file."""
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+def create_run_dir(base: str, algo_name: str) -> str:
+    """Create a timestamped run directory: runs/<timestamp>_<algo>/"""
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_dir = os.path.join(base, f"{timestamp}_{algo_name}")
+    os.makedirs(run_dir, exist_ok=True)
+    return run_dir
 
 
 class PortfolioLogCallback(BaseCallback):
@@ -53,12 +83,12 @@ def build_env(
     etf_data: dict[str, pd.DataFrame],
     macro_data: pd.DataFrame,
     tickers: list[str],
+    transaction_cost_bp: float = 5.0,
+    max_loss_pct: float = 0.07,
 ) -> EtfPortfolioEnv:
     """Build the environment from raw data."""
-    # Compute features
     feature_df = compute_features(etf_data, macro_data)
 
-    # Build close price DataFrame aligned to feature dates
     close_frames = []
     for ticker in tickers:
         close_frames.append(etf_data[ticker]["Close"].rename(ticker))
@@ -69,26 +99,98 @@ def build_env(
         feature_df=feature_df,
         close_df=close_df,
         etf_tickers=tickers,
-        transaction_cost_bp=5.0,
-        max_loss_pct=0.07,
+        transaction_cost_bp=transaction_cost_bp,
+        max_loss_pct=max_loss_pct,
     )
     return env
 
 
+def make_model(algo_name: str, env, cfg_training: dict, tb_log_dir: str):
+    """Create an RL model from config."""
+    algo_cls = ALGO_MAP[algo_name]
+
+    # Common params for all algorithms
+    common = dict(
+        policy="MlpPolicy",
+        env=env,
+        learning_rate=cfg_training["learning_rate"],
+        gamma=cfg_training["gamma"],
+        verbose=1,
+        seed=cfg_training.get("seed", 42),
+        tensorboard_log=tb_log_dir,
+    )
+
+    if algo_name == "PPO":
+        return algo_cls(
+            **common,
+            n_steps=cfg_training["n_steps"],
+            batch_size=cfg_training["batch_size"],
+            n_epochs=cfg_training["n_epochs"],
+            gae_lambda=cfg_training["gae_lambda"],
+            clip_range=cfg_training["clip_range"],
+            ent_coef=cfg_training["ent_coef"],
+        )
+    elif algo_name == "A2C":
+        return algo_cls(
+            **common,
+            n_steps=cfg_training["n_steps"],
+            gae_lambda=cfg_training.get("gae_lambda", 0.95),
+            ent_coef=cfg_training.get("ent_coef", 0.01),
+        )
+    elif algo_name == "SAC":
+        return algo_cls(
+            **common,
+            batch_size=cfg_training.get("batch_size", 256),
+            learning_starts=cfg_training.get("learning_starts", 1000),
+            ent_coef=cfg_training.get("ent_coef", "auto"),
+        )
+    else:
+        raise ValueError(f"Unsupported algorithm: {algo_name}")
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Train ETF Portfolio RL Agent")
+    parser.add_argument(
+        "--config", type=str, default="config.yaml", help="Path to YAML config file"
+    )
+    args = parser.parse_args()
+
+    # --- Load config ---
+    cfg = load_config(args.config)
+    algo_name = cfg["algorithm"].upper()
+    cfg_data = cfg["data"]
+    cfg_env = cfg["env"]
+    cfg_training = cfg["training"]
+
+    if algo_name not in ALGO_MAP:
+        raise ValueError(f"Unknown algorithm '{algo_name}'. Choose from: {list(ALGO_MAP.keys())}")
+
+    # --- Create run directory ---
+    run_dir = create_run_dir("runs", algo_name)
+
+    # Save config copy to run directory
+    shutil.copy2(args.config, os.path.join(run_dir, "config.yaml"))
+
+    tb_log_dir = os.path.join(run_dir, "tensorboard")
+
     print("=" * 60)
-    print("ETF Portfolio PPO Training")
+    print(f"ETF Portfolio Training — {algo_name}")
+    print(f"Run directory: {run_dir}")
     print("=" * 60)
 
     # --- 1. Generate data ---
     print("\n[1/5] Generating synthetic data...")
     tickers = DEFAULT_ETF_TICKERS
-    etf_data = generate_synthetic_ohlcv(tickers, n_days=500)
-    macro_data = generate_synthetic_macro(n_days=500)
+    etf_data = generate_synthetic_ohlcv(tickers, n_days=cfg_data["n_days"], seed=cfg_data.get("seed", 42))
+    macro_data = generate_synthetic_macro(n_days=cfg_data["n_days"], seed=cfg_data.get("seed", 123))
 
     # --- 2. Build environment ---
     print("[2/5] Building environment...")
-    env = build_env(etf_data, macro_data, tickers)
+    env = build_env(
+        etf_data, macro_data, tickers,
+        transaction_cost_bp=cfg_env["transaction_cost_bp"],
+        max_loss_pct=cfg_env["max_loss_pct"],
+    )
 
     # --- 3. Validate environment ---
     print("[3/5] Validating environment with SB3 check_env...")
@@ -103,33 +205,30 @@ def main():
     print(f"  Action space:      {env.action_space}")
     print(f"  Usable timesteps:  {env.n_steps_total}")
 
-    # --- 4. Train PPO ---
-    print("\n[4/5] Training PPO agent...")
-    vec_env = DummyVecEnv([lambda: build_env(etf_data, macro_data, tickers)])
+    # --- 4. Train ---
+    print(f"\n[4/5] Training {algo_name} agent...")
+    vec_env = DummyVecEnv([lambda: build_env(
+        etf_data, macro_data, tickers,
+        transaction_cost_bp=cfg_env["transaction_cost_bp"],
+        max_loss_pct=cfg_env["max_loss_pct"],
+    )])
 
-    model = PPO(
-        "MlpPolicy",
-        vec_env,
-        learning_rate=3e-4,
-        n_steps=256,
-        batch_size=64,
-        n_epochs=10,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        ent_coef=0.01,  # Encourage exploration
-        verbose=1,
-        seed=42,
-    )
+    model = make_model(algo_name, vec_env, cfg_training, tb_log_dir)
 
-    callback = PortfolioLogCallback(log_freq=500)
-    model.learn(total_timesteps=50_000, callback=callback)
-    model.save("ppo_etf_portfolio")
-    print("  Model saved to ppo_etf_portfolio.zip")
+    callback = PortfolioLogCallback(log_freq=cfg_training.get("log_freq", 500))
+    model.learn(total_timesteps=cfg_training["total_timesteps"], callback=callback)
+
+    model_path = os.path.join(run_dir, "model")
+    model.save(model_path)
+    print(f"  Model saved to {model_path}.zip")
 
     # --- 5. Evaluate ---
     print("\n[5/5] Evaluating trained agent...")
-    eval_env = build_env(etf_data, macro_data, tickers)
+    eval_env = build_env(
+        etf_data, macro_data, tickers,
+        transaction_cost_bp=cfg_env["transaction_cost_bp"],
+        max_loss_pct=cfg_env["max_loss_pct"],
+    )
     obs, info = eval_env.reset()
 
     total_reward = 0.0
@@ -146,6 +245,26 @@ def main():
         if step_count % 50 == 0 or done:
             eval_env.render()
 
+    # Build evaluation results
+    eval_results = {
+        "algorithm": algo_name,
+        "total_steps": step_count,
+        "total_reward": float(total_reward),
+        "final_pnl": float(info["cumulative_pnl"]),
+        "final_value": float(info["portfolio_value"]),
+        "final_weights": {
+            ticker: float(info["weights"][i])
+            for i, ticker in enumerate(tickers)
+        },
+        "final_cash": float(info["weights"][-1]),
+        "config": cfg,
+    }
+
+    # Save evaluation results
+    eval_path = os.path.join(run_dir, "eval_results.json")
+    with open(eval_path, "w") as f:
+        json.dump(eval_results, f, indent=2)
+
     print(f"\n{'=' * 60}")
     print(f"Evaluation Results:")
     print(f"  Total steps:      {step_count}")
@@ -158,6 +277,8 @@ def main():
         if w > 0.001:
             print(f"    {ticker:20s}: {w:.2%}")
     print(f"    {'CASH':20s}: {info['weights'][-1]:.2%}")
+    print(f"\n  Results saved to: {eval_path}")
+    print(f"  TensorBoard:      tensorboard --logdir {tb_log_dir}")
     print(f"{'=' * 60}")
 
 
