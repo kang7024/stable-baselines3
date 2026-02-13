@@ -1,0 +1,28 @@
+# ETF Portfolio Training Configuration
+
+# RL Algorithm: PPO, A2C, SAC (SAC requires continuous action space, already supported)
+algorithm: PPO
+
+# Data generation
+data:
+  n_days: 500
+  seed: 42
+
+# Environment parameters
+env:
+  transaction_cost_bp: 5.0
+  max_loss_pct: 0.07
+
+# Training hyperparameters
+training:
+  total_timesteps: 50000
+  learning_rate: 0.0003
+  n_steps: 256
+  batch_size: 64
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  seed: 42
+  log_freq: 500
