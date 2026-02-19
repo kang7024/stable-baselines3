@@ -184,6 +184,10 @@ def main():
     val_end = cfg_data["val_end_date"]
     test_end = cfg_data["test_end_date"]
 
+    # Val/test start from the next business day after the boundary (no overlap)
+    val_start = str((pd.Timestamp(train_end) + pd.offsets.BDay(1)).date())
+    test_start = str((pd.Timestamp(val_end) + pd.offsets.BDay(1)).date())
+
     # --- Create run directory ---
     run_dir = create_run_dir("runs", algo_name)
 
@@ -196,8 +200,8 @@ def main():
     print(f"ETF Portfolio Training — {algo_name}")
     print(f"Run directory: {run_dir}")
     print(f"Date splits:   train [{start_date} ~ {train_end}]")
-    print(f"               val   [{train_end} ~ {val_end}]")
-    print(f"               test  [{val_end} ~ {test_end}]")
+    print(f"               val   [{val_start} ~ {val_end}]")
+    print(f"               test  [{test_start} ~ {test_end}]")
     print("=" * 60)
 
     # --- 1. Generate data ---
@@ -222,8 +226,8 @@ def main():
     # --- 2. Build train / val / test environments ---
     print("[2/6] Building train / val / test environments...")
     train_env = _make_env(start_date, train_end)
-    val_env = _make_env(train_end, val_end)
-    test_env = _make_env(val_end, test_end)
+    val_env = _make_env(val_start, val_end)
+    test_env = _make_env(test_start, test_end)
     print(f"  train steps: {train_env.n_steps_total}")
     print(f"  val   steps: {val_env.n_steps_total}")
     print(f"  test  steps: {test_env.n_steps_total}")
@@ -243,7 +247,7 @@ def main():
     # --- 4. Train with EvalCallback on val set ---
     print(f"\n[4/6] Training {algo_name} agent (EvalCallback on val set)...")
     vec_train_env = DummyVecEnv([lambda: _make_env(start_date, train_end)])
-    vec_val_env = DummyVecEnv([lambda: _make_env(train_end, val_end)])
+    vec_val_env = DummyVecEnv([lambda: _make_env(val_start, val_end)])
 
     eval_callback = EvalCallback(
         vec_val_env,
