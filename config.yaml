@@ -3,9 +3,12 @@
 # RL Algorithm: PPO, A2C, SAC (SAC requires continuous action space, already supported)
 algorithm: PPO
 
-# Data generation
+# Data generation and train/val/test split
 data:
-  n_days: 500
+  start_date: "2022-01-03"
+  train_end_date: "2023-06-30"
+  val_end_date: "2023-12-31"
+  test_end_date: "2024-09-30"
   seed: 42
 
 # Environment parameters
@@ -38,3 +41,4 @@ training:
   ent_coef: 0.01
   seed: 42
   log_freq: 500
+  eval_freq: 5000
